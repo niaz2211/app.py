@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account and profile details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "address": { "type": "string" },
+        "district": { "type": "string" },
+        "joinedDate": { "type": "string" },
+        "status": { "type": "string" },
+        "totalEntriesCount": { "type": "number" },
+        "balance": { "type": "number" },
+        "lastLogin": { "type": "string" },
+        "password": { "type": "string" }
+      },
+      "required": ["id", "name", "phone", "email", "role", "status"]
+    },
+    "DepositRequest": {
+      "title": "DepositRequest",
+      "description": "Payment deposit transaction request",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhone": { "type": "string" },
+        "gateway": { "type": "string" },
+        "senderAccount": { "type": "string" },
+        "targetAccount": { "type": "string" },
+        "amount": { "type": "number" },
+        "trxId": { "type": "string" },
+        "status": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "adminNote": { "type": "string" }
+      },
+      "required": ["id", "userId", "gateway", "amount", "trxId", "status", "timestamp"]
+    },
+    "ContestEntry": {
+      "title": "ContestEntry",
+      "description": "User ticket entry for contest",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ticketNumber": { "type": "string" },
+        "contestId": { "type": "string" },
+        "contestTitle": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhone": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "isFreeDemo": { "type": "boolean" },
+        "paymentMethod": { "type": "string" },
+        "senderAccount": { "type": "string" },
+        "trxId": { "type": "string" },
+        "paidAmount": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "ticketNumber", "contestId", "userId", "timestamp", "status"]
+    },
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Global website configuration and settings",
+      "type": "object",
+      "properties": {
+        "siteName": { "type": "string" },
+        "tagline": { "type": "string" },
+        "heroHeadline": { "type": "string" },
+        "heroSubheadline": { "type": "string" },
+        "entryFeeAmount": { "type": "string" },
+        "bkashNumber": { "type": "string" },
+        "nagadNumber": { "type": "string" },
+        "rocketNumber": { "type": "string" },
+        "adminEmail": { "type": "string" }
+      },
+      "required": ["siteName", "adminEmail"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profiles and accounts"
+    },
+    "/deposits/{depositId}": {
+      "schema": "DepositRequest",
+      "description": "User deposit requests"
+    },
+    "/contest_entries/{entryId}": {
+      "schema": "ContestEntry",
+      "description": "Contest participant tickets"
+    },
+    "/site_settings/{docId}": {
+      "schema": "SiteSettings",
+      "description": "Platform settings and configurations"
+    }
+  }
+}

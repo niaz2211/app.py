@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Play, Pause, Volume2, VolumeX, Sparkles, Smartphone, ShieldCheck, Maximize2, Ticket } from 'lucide-react';
+import { getVideoBlobFromIndexedDB } from '../lib/videoStorage';
 
 export const AnimationVideoSection: React.FC = () => {
   const { siteSettings, setFreeEntryModalOpen, setSelectedContest, contests, currentUser, setAuthModalOpen, setAuthModalMode } = useApp();
@@ -9,6 +10,24 @@ export const AnimationVideoSection: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(videoConfig?.muted ?? true);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [resolvedVideoUrl, setResolvedVideoUrl] = useState<string>(videoConfig?.videoUrl || '');
+
+  // Resolve videoUrl from IndexedDB if stored locally as blob
+  useEffect(() => {
+    let isMounted = true;
+    if (videoConfig?.videoUrl === '__indexeddb__') {
+      getVideoBlobFromIndexedDB().then((blob) => {
+        if (isMounted && blob) {
+          setResolvedVideoUrl(blob);
+        }
+      });
+    } else {
+      setResolvedVideoUrl(videoConfig?.videoUrl || '');
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [videoConfig?.videoUrl]);
 
   // Auto-play on mount when enabled
   useEffect(() => {
@@ -17,7 +36,7 @@ export const AnimationVideoSection: React.FC = () => {
         // Autoplay policy fallback (browser requires user interaction if not muted)
       });
     }
-  }, [videoConfig?.videoUrl, videoConfig?.autoplay]);
+  }, [resolvedVideoUrl, videoConfig?.autoplay]);
 
   if (!videoConfig || videoConfig.enabled === false) {
     return null;
@@ -27,7 +46,6 @@ export const AnimationVideoSection: React.FC = () => {
     title = 'ফ্ল্যাগশিপ মোবাইল রিভিউ ও লাইভ ড্র শোকেস',
     subtitle = 'দেখুন স্যামসাং গ্যালাক্সি S25 আল্ট্রা এবং আইফোন ১৬ প্রো ম্যাক্স এর এক্সক্লুসিভ আনবক্সিং রিভিউ ও ৫০ টাকার নিরপেক্ষ লাইভ ড্র।',
     badge = '📱 অফিসিয়াল মোবাইল রিভিউ ও লাইভ ড্র',
-    videoUrl = 'https://assets.mixkit.co/videos/preview/mixkit-futuristic-technology-device-in-a-studio-41775-large.mp4',
     posterUrl = 'https://images.unsplash.com/photo-1610945415295-d9bbf067e59c?auto=format&fit=crop&w=1200&q=80',
     autoplay = true,
     loop = true,
@@ -43,7 +61,7 @@ export const AnimationVideoSection: React.FC = () => {
     return match && match[2].length === 11 ? match[2] : null;
   };
 
-  const youtubeId = getYouTubeId(videoUrl);
+  const youtubeId = getYouTubeId(resolvedVideoUrl);
 
   const togglePlay = () => {
     if (!videoRef.current) return;
@@ -126,7 +144,7 @@ export const AnimationVideoSection: React.FC = () => {
               <div className="relative w-full aspect-video bg-black flex items-center justify-center">
                 <video
                   ref={videoRef}
-                  src={videoUrl}
+                  src={resolvedVideoUrl}
                   poster={posterUrl}
                   autoPlay={autoplay}
                   loop={loop}

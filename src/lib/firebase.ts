@@ -222,15 +222,76 @@ export async function testFirebaseProjectConnection(
 }
 
 /**
+ * Recursively removes keys with `undefined` values from an object/array,
+ * ensuring Firestore setDoc/updateDoc never fails with:
+ * "FirebaseError: Function setDoc() called with invalid data. Unsupported field value: undefined"
+ */
+export function sanitizeForFirestore<T>(val: T): T {
+  if (val === null || val === undefined) {
+    return null as unknown as T;
+  }
+  if (Array.isArray(val)) {
+    return val
+      .filter((item) => item !== undefined)
+      .map((item) => sanitizeForFirestore(item)) as unknown as T;
+  }
+  if (typeof val === 'object' && !(val instanceof Date)) {
+    const result: Record<string, any> = {};
+    for (const [key, value] of Object.entries(val as Record<string, any>)) {
+      if (value !== undefined) {
+        result[key] = sanitizeForFirestore(value);
+      }
+    }
+    return result as T;
+  }
+  return val;
+}
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: null,
+      email: null,
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error:', JSON.stringify(errInfo));
+  return errInfo;
+}
+
+/**
  * Save or update user profile in Firestore
  */
 export async function saveUserToFirestore(user: UserProfile): Promise<void> {
   try {
     const activeDb = getDb();
     const userRef = doc(activeDb, 'users', user.id);
-    await setDoc(userRef, { ...user, updatedAt: new Date().toISOString() }, { merge: true });
+    const cleanUser = sanitizeForFirestore({ ...user, updatedAt: new Date().toISOString() });
+    await setDoc(userRef, cleanUser, { merge: true });
   } catch (error) {
     console.error('Error saving user to Firestore:', error);
+    handleFirestoreError(error, OperationType.WRITE, `users/${user.id}`);
   }
 }
 
@@ -248,6 +309,7 @@ export async function fetchUsersFromFirestore(): Promise<UserProfile[]> {
     return users;
   } catch (error) {
     console.error('Error fetching users from Firestore:', error);
+    handleFirestoreError(error, OperationType.LIST, 'users');
     return [];
   }
 }
@@ -259,9 +321,11 @@ export async function saveDepositToFirestore(deposit: DepositRequest): Promise<v
   try {
     const activeDb = getDb();
     const depositRef = doc(activeDb, 'deposits', deposit.id);
-    await setDoc(depositRef, deposit, { merge: true });
+    const cleanDeposit = sanitizeForFirestore(deposit);
+    await setDoc(depositRef, cleanDeposit, { merge: true });
   } catch (error) {
     console.error('Error saving deposit to Firestore:', error);
+    handleFirestoreError(error, OperationType.WRITE, `deposits/${deposit.id}`);
   }
 }
 
@@ -279,6 +343,7 @@ export async function fetchDepositsFromFirestore(): Promise<DepositRequest[]> {
     return deposits;
   } catch (error) {
     console.error('Error fetching deposits from Firestore:', error);
+    handleFirestoreError(error, OperationType.LIST, 'deposits');
     return [];
   }
 }
@@ -290,9 +355,11 @@ export async function saveEntryToFirestore(entry: ContestEntry): Promise<void> {
   try {
     const activeDb = getDb();
     const entryRef = doc(activeDb, 'contest_entries', entry.id);
-    await setDoc(entryRef, entry, { merge: true });
+    const cleanEntry = sanitizeForFirestore(entry);
+    await setDoc(entryRef, cleanEntry, { merge: true });
   } catch (error) {
     console.error('Error saving entry to Firestore:', error);
+    handleFirestoreError(error, OperationType.WRITE, `contest_entries/${entry.id}`);
   }
 }
 
@@ -310,6 +377,7 @@ export async function fetchEntriesFromFirestore(): Promise<ContestEntry[]> {
     return entries;
   } catch (error) {
     console.error('Error fetching entries from Firestore:', error);
+    handleFirestoreError(error, OperationType.LIST, 'contest_entries');
     return [];
   }
 }
@@ -321,9 +389,11 @@ export async function saveSiteSettingsToFirestore(settings: SiteSettings): Promi
   try {
     const activeDb = getDb();
     const settingsRef = doc(activeDb, 'site_settings', 'main_config');
-    await setDoc(settingsRef, settings, { merge: true });
+    const cleanSettings = sanitizeForFirestore(settings);
+    await setDoc(settingsRef, cleanSettings, { merge: true });
   } catch (error) {
     console.error('Error saving site settings to Firestore:', error);
+    handleFirestoreError(error, OperationType.WRITE, 'site_settings/main_config');
   }
 }
 
@@ -341,8 +411,10 @@ export async function fetchSiteSettingsFromFirestore(): Promise<SiteSettings | n
     return null;
   } catch (error) {
     console.error('Error fetching site settings from Firestore:', error);
+    handleFirestoreError(error, OperationType.GET, 'site_settings/main_config');
     return null;
   }
 }
 
 export default app;
+

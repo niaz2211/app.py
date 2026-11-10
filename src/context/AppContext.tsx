@@ -38,6 +38,13 @@ import {
   testFirebaseProjectConnection,
   getSavedClientFirebaseConfig,
 } from '../lib/firebase';
+import {
+  saveVideoBlobToIndexedDB,
+  getVideoBlobFromIndexedDB,
+  clearVideoBlobFromIndexedDB,
+  saveVideoConfigBackup,
+  getVideoConfigBackup,
+} from '../lib/videoStorage';
 
 export type AppView =
   | 'home'
@@ -134,6 +141,7 @@ interface AppContextType {
   toggleAutoApproveRegistration: (enabled?: boolean) => void;
   updateAnimationVideo: (videoConfig: Partial<AnimationVideoConfig>) => void;
   toggleAnimationVideo: (enabled?: boolean) => void;
+  resetAnimationVideoToDefault: () => Promise<void>;
   addLegalDocument: (doc: Omit<LegalDocument, 'id'>) => void;
   updateLegalDocument: (id: string, doc: Partial<LegalDocument>) => void;
   deleteLegalDocument: (id: string) => void;
@@ -233,12 +241,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Load site settings ensuring user credentials niazuddinmd1@gmail.com / 67373 and deposit number 01863440490
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(() => {
     const saved = localStorage.getItem('app_settings');
+    const backupVideo = getVideoConfigBackup();
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        let resolvedVideo = parsed.animationVideo || backupVideo || initialSiteSettings.animationVideo;
+        if (backupVideo && (!parsed.animationVideo || (backupVideo.updatedAt && (!parsed.animationVideo.updatedAt || backupVideo.updatedAt >= parsed.animationVideo.updatedAt)))) {
+          resolvedVideo = backupVideo;
+        }
+
         return {
           ...initialSiteSettings,
           ...parsed,
+          animationVideo: resolvedVideo,
           bkashNumber: parsed.bkashNumber && !parsed.bkashNumber.includes('০১৭১১') ? parsed.bkashNumber : '01863440490',
           nagadNumber: parsed.nagadNumber && !parsed.nagadNumber.includes('০১৮১১') ? parsed.nagadNumber : '01863440490',
           rocketNumber: parsed.rocketNumber && !parsed.rocketNumber.includes('০১৯১১') ? parsed.rocketNumber : '01863440490',
@@ -249,10 +264,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           legalDocuments: Array.isArray(parsed.legalDocuments) && parsed.legalDocuments.length > 0 ? parsed.legalDocuments : initialLegalDocuments,
         };
       } catch {
-        return initialSiteSettings;
+        return {
+          ...initialSiteSettings,
+          animationVideo: backupVideo || initialSiteSettings.animationVideo,
+        };
       }
     }
-    return initialSiteSettings;
+    return {
+      ...initialSiteSettings,
+      animationVideo: backupVideo || initialSiteSettings.animationVideo,
+    };
   });
 
   const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>(() => {
@@ -334,8 +355,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [deposits]);
 
   useEffect(() => {
-    localStorage.setItem('app_settings', JSON.stringify(siteSettings));
+    try {
+      localStorage.setItem('app_settings', JSON.stringify(siteSettings));
+    } catch (e) {
+      console.warn('Quota exceeded saving app_settings, saving compact version:', e);
+      try {
+        const compactSettings = {
+          ...siteSettings,
+          animationVideo: siteSettings.animationVideo
+            ? {
+                ...siteSettings.animationVideo,
+                videoUrl:
+                  siteSettings.animationVideo.videoUrl &&
+                  siteSettings.animationVideo.videoUrl.startsWith('data:') &&
+                  siteSettings.animationVideo.videoUrl.length > 150000
+                    ? '__indexeddb__'
+                    : siteSettings.animationVideo.videoUrl,
+              }
+            : undefined,
+        };
+        localStorage.setItem('app_settings', JSON.stringify(compactSettings));
+      } catch (inner) {
+        console.error('Failed to save settings to localStorage:', inner);
+      }
+    }
   }, [siteSettings]);
+
+  // Load custom video blob from IndexedDB on startup if stored
+  useEffect(() => {
+    let isMounted = true;
+    getVideoBlobFromIndexedDB().then((blob) => {
+      if (isMounted && blob) {
+        setSiteSettings((prev) => {
+          if (!prev.animationVideo) return prev;
+          if (
+            prev.animationVideo.videoUrl === '__indexeddb__' ||
+            (prev.animationVideo.videoUrl && prev.animationVideo.videoUrl.startsWith('data:')) ||
+            !prev.animationVideo.videoUrl
+          ) {
+            return {
+              ...prev,
+              animationVideo: {
+                ...prev.animationVideo,
+                videoUrl: blob,
+              },
+            };
+          }
+          return prev;
+        });
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('app_admin_logs', JSON.stringify(adminLogs));
@@ -418,10 +491,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
         }
 
-        // 4. Sync Site Settings from Firestore
+        // 4. Sync Site Settings from Firestore without wiping user's newer custom review video
         const fbSettings = await fetchSiteSettingsFromFirestore();
         if (isMounted && fbSettings) {
-          setSiteSettings(fbSettings);
+          setSiteSettings((prev) => {
+            const currentVideo = prev.animationVideo;
+            const fbVideo = fbSettings.animationVideo;
+
+            let finalVideo = fbVideo || currentVideo;
+            if (currentVideo) {
+              if (!fbVideo) {
+                finalVideo = currentVideo;
+              } else if (currentVideo.updatedAt && (!fbVideo.updatedAt || currentVideo.updatedAt >= fbVideo.updatedAt)) {
+                finalVideo = {
+                  ...fbVideo,
+                  ...currentVideo,
+                  videoUrl:
+                    currentVideo.videoUrl && currentVideo.videoUrl !== '__indexeddb__'
+                      ? currentVideo.videoUrl
+                      : fbVideo.videoUrl,
+                };
+              } else if (fbVideo.videoUrl === '__indexeddb__' && currentVideo.videoUrl && currentVideo.videoUrl !== '__indexeddb__') {
+                finalVideo = {
+                  ...fbVideo,
+                  videoUrl: currentVideo.videoUrl,
+                };
+              }
+            }
+
+            return {
+              ...fbSettings,
+              animationVideo: finalVideo,
+            };
+          });
         }
       } catch (err) {
         console.error('Failed to sync initial data from Firebase:', err);
@@ -931,7 +1033,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const dep = deposits.find((d) => d.id === depositId);
     if (!dep) return;
 
-    const updatedDep: DepositRequest = { ...dep, status, adminNote };
+    const noteToSet = adminNote && adminNote.trim() ? adminNote.trim() : (dep.adminNote || undefined);
+    const updatedDep: DepositRequest = {
+      ...dep,
+      status,
+      ...(noteToSet ? { adminNote: noteToSet } : {}),
+    };
+    if (!noteToSet) {
+      delete (updatedDep as any).adminNote;
+    }
     setDeposits((prev) =>
       prev.map((d) => (d.id === depositId ? updatedDep : d))
     );
@@ -1161,37 +1271,95 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast(`ইউজার সাইন আপ অটো অ্যাপ্রুভ সিস্টেম ${nextVal ? 'চালু (ON)' : 'বন্ধ (OFF)'} করা হয়েছে!`, 'success');
   };
 
-  const updateAnimationVideo = (videoConfig: Partial<AnimationVideoConfig>) => {
+  const updateAnimationVideo = async (videoConfig: Partial<AnimationVideoConfig>) => {
     const current = siteSettings.animationVideo || initialSiteSettings.animationVideo!;
+    const updatedAt = new Date().toISOString();
     const updatedVideo: AnimationVideoConfig = {
       ...current,
       ...videoConfig,
+      updatedAt,
     };
+
+    // If user provided a data URL (file upload), save into IndexedDB for persistent storage
+    if (updatedVideo.videoUrl && updatedVideo.videoUrl.startsWith('data:')) {
+      await saveVideoBlobToIndexedDB(updatedVideo.videoUrl);
+    }
+
+    // Save persistent backup to localStorage
+    saveVideoConfigBackup(updatedVideo);
+
     const newSettings: SiteSettings = {
       ...siteSettings,
       animationVideo: updatedVideo,
     };
     setSiteSettings(newSettings);
-    saveSiteSettingsToFirestore(newSettings);
-    addLog('অ্যানিমেশন ভিডিও আপডেট', `ভিডিও সেটিংস পরিবর্তন: ${updatedVideo.title}`);
-    showToast('অ্যানিমেশন ভিডিও সেটিংস সফলভাবে আপডেট হয়েছে!', 'success');
+
+    // Save to Firestore safely (if video is a giant data URL, store marker so Firestore 1MB limit is not breached)
+    const firestoreSettings: SiteSettings = {
+      ...newSettings,
+      animationVideo: {
+        ...updatedVideo,
+        videoUrl:
+          updatedVideo.videoUrl && updatedVideo.videoUrl.startsWith('data:') && updatedVideo.videoUrl.length > 200000
+            ? '__indexeddb__'
+            : updatedVideo.videoUrl,
+      },
+    };
+    saveSiteSettingsToFirestore(firestoreSettings);
+
+    addLog('মোবাইল রিভিউ ভিডিও আপডেট', `ভিডিও পরিবর্তন: ${updatedVideo.title}`);
+    showToast('মোবাইল রিভিউ ভিডিও সফলভাবে সংরক্ষিত ও স্থায়ী করা হয়েছে!', 'success');
   };
 
   const toggleAnimationVideo = (enabled?: boolean) => {
     const current = siteSettings.animationVideo || initialSiteSettings.animationVideo!;
     const nextVal = enabled !== undefined ? enabled : !current.enabled;
+    const updatedAt = new Date().toISOString();
     const updatedVideo: AnimationVideoConfig = {
       ...current,
       enabled: nextVal,
+      updatedAt,
     };
+    saveVideoConfigBackup(updatedVideo);
+
     const newSettings: SiteSettings = {
       ...siteSettings,
       animationVideo: updatedVideo,
     };
     setSiteSettings(newSettings);
-    saveSiteSettingsToFirestore(newSettings);
+
+    const firestoreSettings: SiteSettings = {
+      ...newSettings,
+      animationVideo: {
+        ...updatedVideo,
+        videoUrl:
+          updatedVideo.videoUrl && updatedVideo.videoUrl.startsWith('data:') && updatedVideo.videoUrl.length > 200000
+            ? '__indexeddb__'
+            : updatedVideo.videoUrl,
+      },
+    };
+    saveSiteSettingsToFirestore(firestoreSettings);
+
     addLog('অ্যানিমেশন ভিডিও অন/অফ', `ভিডিও সেকশন ${nextVal ? 'চালু (ON)' : 'বন্ধ (OFF)'} করা হয়েছে`);
     showToast(`অ্যানিমেশন ভিডিও সেকশন ${nextVal ? 'চালু (ON)' : 'বন্ধ (OFF)'} করা হয়েছে!`, nextVal ? 'success' : 'info');
+  };
+
+  const resetAnimationVideoToDefault = async () => {
+    await clearVideoBlobFromIndexedDB();
+    const defaultVid: AnimationVideoConfig = {
+      ...initialSiteSettings.animationVideo!,
+      updatedAt: new Date().toISOString(),
+    };
+    saveVideoConfigBackup(defaultVid);
+
+    const newSettings: SiteSettings = {
+      ...siteSettings,
+      animationVideo: defaultVid,
+    };
+    setSiteSettings(newSettings);
+    saveSiteSettingsToFirestore(newSettings);
+    addLog('অ্যানিমেশন ভিডিও রিসেট', 'ডিফল্ট ভিডিওতে রিসেট করা হয়েছে');
+    showToast('ডিফল্ট মোবাইল রিভিউ ভিডিও সফলভাবে পুনরুদ্ধার করা হয়েছে!', 'info');
   };
 
   const updateUser = (userId: string, data: Partial<UserProfile>) => {
@@ -1401,6 +1569,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleAutoApproveRegistration,
         updateAnimationVideo,
         toggleAnimationVideo,
+        resetAnimationVideoToDefault,
         addLegalDocument,
         updateLegalDocument,
         deleteLegalDocument,

@@ -44,6 +44,7 @@ import {
 } from 'lucide-react';
 import { ContestPrize, Notice, UserProfile, LegalDocument, ClientFirebaseConfig, AnimationVideoConfig } from '../types';
 import { initialLegalDocuments } from '../data/mockData';
+import { getVideoBlobFromIndexedDB } from '../lib/videoStorage';
 import confetti from 'canvas-confetti';
 import { LuckyWheel, WheelCandidate } from './LuckyWheel';
 
@@ -80,6 +81,7 @@ export const AdminDashboard: React.FC = () => {
     toggleAutoApproveRegistration,
     updateAnimationVideo,
     toggleAnimationVideo,
+    resetAnimationVideoToDefault,
     addLegalDocument,
     updateLegalDocument,
     deleteLegalDocument,
@@ -200,10 +202,45 @@ export const AdminDashboard: React.FC = () => {
   const [videoAutoplay, setVideoAutoplay] = useState(initialVid.autoplay);
   const [videoLoop, setVideoLoop] = useState(initialVid.loop);
   const [videoMuted, setVideoMuted] = useState(initialVid.muted);
+  const [uploadedFileName, setUploadedFileName] = useState<string>(initialVid.fileName || '');
 
-  const handleSaveAnimationVideo = (e: React.FormEvent) => {
+  // Synchronize form inputs whenever siteSettings.animationVideo changes (e.g. from IndexedDB or storage)
+  useEffect(() => {
+    let isMounted = true;
+    if (siteSettings.animationVideo) {
+      setVideoTitle(siteSettings.animationVideo.title || '');
+      setVideoSubtitle(siteSettings.animationVideo.subtitle || '');
+      setVideoBadge(siteSettings.animationVideo.badge || '');
+      setVideoPoster(siteSettings.animationVideo.posterUrl || '');
+      setVideoAutoplay(siteSettings.animationVideo.autoplay ?? true);
+      setVideoLoop(siteSettings.animationVideo.loop ?? true);
+      setVideoMuted(siteSettings.animationVideo.muted ?? true);
+      if (siteSettings.animationVideo.fileName) {
+        setUploadedFileName(siteSettings.animationVideo.fileName);
+      }
+
+      if (siteSettings.animationVideo.videoUrl === '__indexeddb__') {
+        getVideoBlobFromIndexedDB().then((blob) => {
+          if (isMounted && blob) {
+            setVideoUrl(blob);
+          }
+        });
+      } else {
+        setVideoUrl(siteSettings.animationVideo.videoUrl || '');
+      }
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [siteSettings.animationVideo]);
+
+  const handleSaveAnimationVideo = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateAnimationVideo({
+    if (!videoUrl || !videoUrl.trim()) {
+      showToast('অনুগ্রহ করে ভিডিও ইউআরএল দিন অথবা একটি ভিডিও ফাইল আপলোড করুন।', 'error');
+      return;
+    }
+    await updateAnimationVideo({
       title: videoTitle.trim(),
       subtitle: videoSubtitle.trim(),
       badge: videoBadge.trim(),
@@ -212,6 +249,7 @@ export const AdminDashboard: React.FC = () => {
       autoplay: videoAutoplay,
       loop: videoLoop,
       muted: videoMuted,
+      fileName: uploadedFileName || undefined,
     });
   };
 
@@ -224,11 +262,14 @@ export const AdminDashboard: React.FC = () => {
       return;
     }
 
+    const nameWithDetails = `${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)`;
+    setUploadedFileName(nameWithDetails);
+
     const reader = new FileReader();
     reader.onload = (event) => {
       if (event.target?.result) {
         setVideoUrl(event.target.result as string);
-        showToast('ভিডিও ফাইল সফলভাবে লোড হয়েছে! "মোবাইল রিভিউ ভিডিও সংরক্ষণ করুন" বাটনে ক্লিক করে সেভ করুন।', 'success');
+        showToast(`'${file.name}' সফলভাবে লোড হয়েছে! নিচে "মোবাইল রিভিউ ভিডিও সংরক্ষণ করুন" বাটনে ক্লিক করুন। এটি স্থায়ীভাবে সেভ থাকবে।`, 'success');
       }
     };
     reader.readAsDataURL(file);
@@ -1771,12 +1812,17 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               {/* Direct File Upload Option */}
-              <div className="p-4 bg-slate-950/90 rounded-2xl border border-amber-500/30 space-y-2">
-                <label className="block text-xs font-bold text-amber-300">
-                  📁 ডিভাইস থেকে সরাসরি ভিডিও ফাইল আপলোড করুন (MP4 বা WebM):
-                </label>
+              <div className="p-4 bg-slate-950/90 rounded-2xl border border-amber-500/30 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-amber-300">
+                    📁 ডিভাইস থেকে সরাসরি ভিডিও ফাইল আপলোড করুন (MP4 বা WebM):
+                  </label>
+                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
+                    স্থায়ী সংরক্ষণ সক্রিয়
+                  </span>
+                </div>
                 <p className="text-[11px] text-slate-400">
-                  আপনার মোবাইল বা কম্পিউটার থেকে রিভিউ ভিডিও ফাইলটি বেছে নিন।
+                  আপনার মোবাইল বা কম্পিউটার থেকে রিভিউ ভিডিও ফাইলটি বেছে নিন। এটি ব্রাউজারের হাই-ক্যাপাসিটি স্টোরেজে পার্মানেন্টলি সেভ হয়ে থাকবে (রিফ্রেশ দিলেও কাটবে না)।
                 </p>
                 <input
                   type="file"
@@ -1784,6 +1830,14 @@ export const AdminDashboard: React.FC = () => {
                   onChange={handleVideoFileUpload}
                   className="w-full text-xs text-slate-300 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-amber-500 file:text-slate-950 hover:file:bg-amber-400 cursor-pointer"
                 />
+                {uploadedFileName && (
+                  <div className="mt-1 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs text-amber-300">
+                    <span className="font-medium truncate max-w-xs">
+                      🎥 নির্বাচিত ফাইল: <strong>{uploadedFileName}</strong>
+                    </span>
+                    <span className="text-[10px] text-emerald-400 font-bold">● প্রস্তুত</span>
+                  </div>
+                )}
               </div>
 
               <form onSubmit={handleSaveAnimationVideo} className="space-y-4 text-xs">
@@ -1830,19 +1884,44 @@ export const AdminDashboard: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">
-                    ভিডিও ইউআরএল (অনলাইন লিংক - Direct MP4 / WebM অথবা YouTube লিংক / Shorts)
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={videoUrl}
-                    onChange={(e) => setVideoUrl(e.target.value)}
-                    placeholder="https://...mp4 অথবা https://youtube.com/watch?v=... বা https://youtube.com/shorts/..."
-                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-amber-300 font-mono focus:border-amber-400"
-                  />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-300 font-semibold">
+                      ভিডিও উৎস (অনলাইন লিংক অথবা ডিভাইস ফাইল)
+                    </label>
+                    {videoUrl.startsWith('data:') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVideoUrl('');
+                          setUploadedFileName('');
+                        }}
+                        className="text-[11px] text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                      >
+                        ফাইল পরিবর্তন করে অনলাইন লিংক দিন
+                      </button>
+                    )}
+                  </div>
+                  {videoUrl.startsWith('data:') ? (
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/40 rounded-xl flex items-center justify-between">
+                      <span className="text-amber-300 font-medium truncate max-w-sm">
+                        📁 {uploadedFileName || 'ডিভাইস থেকে ভিডিও ফাইল সফলভাবে সংযুক্ত ও লোড করা হয়েছে'}
+                      </span>
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
+                        ফাইল সক্রিয়
+                      </span>
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      required
+                      value={videoUrl}
+                      onChange={(e) => setVideoUrl(e.target.value)}
+                      placeholder="https://...mp4 অথবা https://youtube.com/watch?v=... বা https://youtube.com/shorts/..."
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-amber-300 font-mono focus:border-amber-400"
+                    />
+                  )}
                   <span className="text-[10px] text-slate-400 block mt-1">
-                    💡 সরাসরি যেকোনো MP4/WebM রিভিউ ভিডিও, ফাইল ডাটা অথবা ইউটিউব লিংক পেস্ট করতে পারেন।
+                    💡 সরাসরি যেকোনো MP4/WebM রিভিউ ভিডিও লিংক, আপলোডকৃত ফাইল অথবা ইউটিউব/শর্টস লিংক ব্যবহার করতে পারেন।
                   </span>
                 </div>
 
@@ -1892,21 +1971,30 @@ export const AdminDashboard: React.FC = () => {
                   </label>
                 </div>
 
-                <div className="pt-2 flex items-center gap-3">
+                {/* Persistence Assurance Banner */}
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-start gap-2.5 text-xs text-emerald-300">
+                  <ShieldCheck className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                  <p className="leading-relaxed">
+                    <strong>স্থায়ী সংরক্ষণ সক্রিয়:</strong> আপনার যুক্ত করা ভিডিও ব্রাউজারের স্থায়ী IndexedDB এবং ক্লাউড সিস্টেমে সেভ থাকে। তাই পেজ রিফ্রেশ দিলেও ভিডিও কাটবে না বা ডিফল্ট ভিডিওতে ফিরে যাবে না।
+                  </p>
+                </div>
+
+                <div className="pt-2 flex flex-wrap items-center gap-3">
                   <button
                     type="submit"
                     className="py-3 px-6 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-amber-500/20 active:scale-95 transition-all cursor-pointer"
                   >
                     <Save className="w-4 h-4" />
-                    <span>অ্যানিমেশন ভিডিও সংরক্ষণ করুন</span>
+                    <span>মোবাইল রিভিউ ভিডিও সংরক্ষণ করুন</span>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => applyVideoPreset('tech3d')}
-                    className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                    onClick={() => resetAnimationVideoToDefault()}
+                    className="py-3 px-4 bg-slate-800 hover:bg-rose-900/40 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-500/40 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                    title="প্রয়োজনে ডিফল্ট ভিডিও ফিরিয়ে আনুন"
                   >
-                    রিসেট
+                    ডিফল্ট ভিডিওতে রিসেট
                   </button>
                 </div>
               </form>

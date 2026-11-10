@@ -173,6 +173,8 @@ export interface AnimationVideoConfig {
   autoplay: boolean;
   loop: boolean;
   muted: boolean;
+  updatedAt?: string;
+  fileName?: string;
 }
 
 export interface ClientFirebaseConfig {
